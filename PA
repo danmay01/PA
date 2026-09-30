@@ -1,0 +1,57 @@
+Suponiendo que tus actividades están en una lista (por ejemplo SharePoint) llamada **Actividades** con una columna **Estado**, los 3 campos serían **Completadas**, **En progreso** y **Pendientes**. Ajusta los nombres a los tuyos.
+
+**1. Pantalla → `OnVisible`** (calcula todo una sola vez)
+
+```
+Set(varTotalActividades; CountRows(Actividades));;
+Set(varActividadesCompletadas; CountIf(Actividades; Estado = "Completada"));;
+Set(varActividadesEnProgreso; CountIf(Actividades; Estado = "En progreso"));;
+Set(varActividadesPendientes; CountIf(Actividades; Estado = "Pendiente"))
+```
+
+Como usas `;` como separador de argumentos, el encadenamiento entre instrucciones va con `;;`.
+
+**2. Label Completadas → `Text`**
+
+```
+"Completadas: " & varActividadesCompletadas & " (" &
+If(
+    varTotalActividades = 0;
+    "0%";
+    Round(varActividadesCompletadas * 100 / varTotalActividades; 0) & "%"
+) & ")"
+```
+
+**3. Label En progreso → `Text`**
+
+```
+"En progreso: " & varActividadesEnProgreso & " (" &
+If(
+    varTotalActividades = 0;
+    "0%";
+    Round(varActividadesEnProgreso * 100 / varTotalActividades; 0) & "%"
+) & ")"
+```
+
+**4. Label Pendientes → `Text`**
+
+```
+"Pendientes: " & varActividadesPendientes & " (" &
+If(
+    varTotalActividades = 0;
+    "0%";
+    Round(varActividadesPendientes * 100 / varTotalActividades; 0) & "%"
+) & ")"
+```
+
+**Opcional: una barra por campo**, igual a la morada. Usa un rectángulo de fondo (`rectFondo`) y encima uno de relleno con esta propiedad `Width`:
+
+```
+rectFondo.Width * varActividadesEnProgreso / Max(varTotalActividades; 1)
+```
+
+Así no hace falta el `If`, porque `Max(...; 1)` ya evita dividir por cero.
+
+Dos avisos:
+- Si **Estado** es una columna de tipo **Choice** en SharePoint, la condición es `Estado.Value = "Completada"`.
+- `CountRows` y `CountIf` no se delegan en SharePoint. Con más de 500 registros (o 2000, si subiste el límite) los conteos salen mal sin avisarte. Si la lista es grande, avísame y te lo armo con `Filter` delegable o con una colección.
