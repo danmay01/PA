@@ -1,57 +1,84 @@
-Suponiendo que tus actividades están en una lista (por ejemplo SharePoint) llamada **Actividades** con una columna **Estado**, los 3 campos serían **Completadas**, **En progreso** y **Pendientes**. Ajusta los nombres a los tuyos.
-
-**1. Pantalla → `OnVisible`** (calcula todo una sola vez)
-
-```
-Set(varTotalActividades; CountRows(Actividades));;
-Set(varActividadesCompletadas; CountIf(Actividades; Estado = "Completada"));;
-Set(varActividadesEnProgreso; CountIf(Actividades; Estado = "En progreso"));;
-Set(varActividadesPendientes; CountIf(Actividades; Estado = "Pendiente"))
-```
-
-Como usas `;` como separador de argumentos, el encadenamiento entre instrucciones va con `;;`.
-
-**2. Label Completadas → `Text`**
-
-```
-"Completadas: " & varActividadesCompletadas & " (" &
-If(
-    varTotalActividades = 0;
-    "0%";
-    Round(varActividadesCompletadas * 100 / varTotalActividades; 0) & "%"
-) & ")"
-```
-
-**3. Label En progreso → `Text`**
-
-```
-"En progreso: " & varActividadesEnProgreso & " (" &
-If(
-    varTotalActividades = 0;
-    "0%";
-    Round(varActividadesEnProgreso * 100 / varTotalActividades; 0) & "%"
-) & ")"
-```
-
-**4. Label Pendientes → `Text`**
-
-```
-"Pendientes: " & varActividadesPendientes & " (" &
-If(
-    varTotalActividades = 0;
-    "0%";
-    Round(varActividadesPendientes * 100 / varTotalActividades; 0) & "%"
-) & ")"
-```
-
-**Opcional: una barra por campo**, igual a la morada. Usa un rectángulo de fondo (`rectFondo`) y encima uno de relleno con esta propiedad `Width`:
-
-```
-rectFondo.Width * varActividadesEnProgreso / Max(varTotalActividades; 1)
-```
-
-Así no hace falta el `If`, porque `Max(...; 1)` ya evita dividir por cero.
-
-Dos avisos:
-- Si **Estado** es una columna de tipo **Choice** en SharePoint, la condición es `Estado.Value = "Completada"`.
-- `CountRows` y `CountIf` no se delegan en SharePoint. Con más de 500 registros (o 2000, si subiste el límite) los conteos salen mal sin avisarte. Si la lista es grande, avísame y te lo armo con `Filter` delegable o con una colección.
+Alertas de mantenimiento RDS – cuentas H2H
+Oct 6, 2026 · @Danny Mayo
+Contexto y necesidad
+Necesitamos enterarnos con anticipación de los mantenimientos y upgrades automáticos que AWS programa sobre las RDS de las cuentas AppH2h, con la fecha en que se van a aplicar.
+El caso que lo originó: la RDS aw1070001-h2h-qa-rds (Oracle Enterprise Edition, db.t3.xlarge, us-east-1a) tiene programado un Automatic minor version upgrade a oracle-ee 19.0.0.0.ru-2026-07.mrp-2026-07.r1 para el 11 de octubre de 2026, ventana 02:00–04:00 hora Colombia (UTC-5). Nadie del equipo recibió aviso; se encontró revisando la consola.
+El Auto minor version upgrade está habilitado y no es algo que el equipo pueda desactivar, así que la necesidad no es evitar el upgrade sino saber cuándo ocurre.
+Hallazgos
+AWS sí avisa con casi dos meses de anticipación, y ese aviso ya sale de nuestras cuentas hacia CloudCenter; simplemente no nos llega a nosotros.
+#
+Dónde se validó
+Qué se encontró
+1
+RDS → aw1070001-h2h-qa-rds → Maintenance (QA)
+Pending maintenance: Automatic minor version upgrade a 19.0.0.0.ru-2026-07.mrp-2026-07.r1, tipo db-upgrade, se aplica en la próxima ventana (11 oct 2026, 02:00–04:00 UTC-5). Upgrade rollout order: second.
+2
+AWS Health Dashboard → Event log (QA)
+Evento RDS engine upgrade, categoría Scheduled change, Action required. Describe una campaña de Auto Minor Version Upgrade para RDS Oracle hacia esa misma versión, programando desde el 2 sep 2026. Publicado el 19 ago 2026.
+3
+Health → Affected resources (QA)
+1 recurso pendiente, orden Second, Maintenance apply time 11 oct 2026 00:00 UTC-7 (= 02:00 hora Colombia). Coincide con la ventana de la RDS.
+4
+Account → Contact information / Alternate contacts (QA)
+Access denied en Billing, Operations y Security. El rol BCO-FullStackQARole no puede ver a qué correo llegan los avisos de AWS.
+5
+EventBridge → bus default → Rules (QA)
+Regla cld0014001-cloudcenter-pdn-fullevents-rule, habilitada. Patrón con source = aws.health, aws.organizations, aws.marketplace, aws.marketplaceentitlement, aws.agreement-marketplace, aws.sso.
+6
+Misma regla → Targets (QA)
+Envía el evento completo (Matched event) al bus cld0014001-cloudcenter-pdn-central-eventbus en la cuenta 800725796785.
+7
+EventBridge → bus default → Rules (PDN)
+La misma regla cld0014001-cloudcenter-pdn-fullevents-rule existe en AppH2hPDN con el mismo patrón (aws.health incluido).
+8
+Azure DevOps → pipeline de infraestructura de Plexo
+Los stages son DEV → QA → PDN y deploy qa depende de deploy dev. No se puede desplegar directo a QA, y la cuenta AppH2hDEV está en retiro.
+Pendiente de confirmar: el Target de la regla en PDN (se asume el mismo bus central, por ser una regla estándar).
+Qué necesitamos
+Una regla en el bus central de CloudCenter que filtre los eventos de RDS scheduledChange de AppH2hQA y AppH2hPDN y los envíe a una lista de distribución del equipo. No requiere desarrollo ni despliegues en nuestras cuentas.
+• Qué eventos: source = aws.health, servicio RDS, categoría scheduledChange (upgrades de motor, parches de SO, eventos de ciclo de vida).
+• De qué cuentas: AppH2hQA (396914754332) y AppH2hPDN (142200366721).
+• A dónde: una lista de distribución del equipo, no un correo personal, para que el aviso no dependa de una sola persona.
+• Formato deseable: que el correo muestre servicio, descripción, recurso afectado y fecha de aplicación, en vez del JSON crudo (se logra con un input transformer en la regla, sin código).
+Alternativa descartada por ahora: desplegar nosotros una regla de EventBridge + SNS (o una Lambda) en cada cuenta vía Plexo. Se descartó porque el pipeline exige pasar por DEV antes de QA, la cuenta DEV está en retiro y nadie del equipo ha desplegado antes en estas cuentas. Queda como plan B si CloudCenter no puede enrutar los eventos.
+Preguntas para Plataformas / CloudCenter
+La primera es la que define el camino; las demás dependen de su respuesta.
+1. ¿Pueden crear en el bus cld0014001-cloudcenter-pdn-central-eventbus una regla que filtre RDS scheduledChange de las cuentas 396914754332 y 142200366721 y la envíe a nuestra lista de distribución?
+    ◦ Si sí: ¿qué debemos solicitar formalmente (caso, habilitador, formulario) y cuánto tarda?
+    ◦ ¿Pueden darle formato legible al correo o llega el JSON completo?
+2. ¿Ya existe un canal donde CloudCenter publique estos avisos (correo, Teams, dashboard) al que solo tengamos que suscribirnos?
+3. ¿A qué correo llega hoy el contacto de Operations de las cuentas AppH2h? Nuestro rol no tiene permiso para verlo. ¿Alguien recibió el aviso del 19 de agosto?
+4. Confirmar que la regla de PDN envía al mismo bus central (validamos el patrón, no el destino).
+5. Plan B, si no pueden enrutarlo: ¿cómo desplegamos una regla de EventBridge + SNS en AppH2hQA y AppH2hPDN desde Plexo, si el pipeline exige deploy dev y la cuenta AppH2hDEV (807345545556) está en retiro? ¿Se puede configurar el pipeline para empezar en QA?
+6. Alcance: ¿sirve la misma solución para otras cuentas o servicios que manejamos (por ejemplo, Lambda o RDS de otras aplicaciones), o se solicita cuenta por cuenta?
+Anexo técnico
+Cuenta
+ID
+Estado
+Regla CloudCenter
+AppH2hQA
+396914754332
+Activa
+cld0014001-cloudcenter-pdn-fullevents-rule (validada: patrón y destino)
+AppH2hPDN
+142200366721
+Activa
+cld0014001-cloudcenter-pdn-fullevents-rule (validado: patrón)
+AppH2hDEV
+807345545556
+En retiro
+No revisada
+CloudCenter (destino)
+800725796785
+—
+Bus cld0014001-cloudcenter-pdn-central-eventbus
+Patrón propuesto para la regla en el bus central:
+{
+  "source": ["aws.health"],
+  "account": ["396914754332", "142200366721"],
+  "detail": {
+    "service": ["RDS"],
+    "eventTypeCategory": ["scheduledChange"]
+  }
+}
+Datos del evento de referencia: AWS Health → RDS engine upgrade, región us-east-1, recurso aw1070001-h2h-qa-rds, versión destino 19.0.0.0.ru-2026-07.mrp-2026-07.r1, aplicación 11 oct 2026 02:00 hora Colombia.
